@@ -1,14 +1,6 @@
-use bincode::Options;
-use serde::Deserialize;
 use std::fmt::Write;
-
-pub fn decode_bytes_be<'de, T>(bytes: &'de [u8]) -> T where T: Deserialize<'de> {
-    let config = bincode::DefaultOptions::new()
-        .with_big_endian()
-        .allow_trailing_bytes()
-        .with_fixint_encoding();
-    config.deserialize::<T>(bytes).expect("Parsed struct")
-}
+use bytes::Buf;
+use std::string::FromUtf8Error;
 
 pub fn format_hex(buffer: &[u8]) -> String {
     let mut s = String::new();
@@ -19,33 +11,43 @@ pub fn format_hex(buffer: &[u8]) -> String {
     s
 }
 
+pub trait GetString: Buf {
+    fn get_string(&mut self, length: usize) -> Result<String, FromUtf8Error>;
+}
+
+impl<B: Buf> GetString for B {
+    fn get_string(&mut self, length: usize) -> Result<String, FromUtf8Error> {
+        let mut buf = vec![0; length];
+        self.copy_to_slice(&mut buf);
+        String::from_utf8(buf)
+    }
+}
+
+pub trait GetBytes: Buf {
+    fn get_bytes<const N: usize>(&mut self) -> [u8; N];
+}
+
+impl<B: Buf> GetBytes for B {
+    fn get_bytes<const N: usize>(&mut self) -> [u8; N] {
+        let mut buf = [0; N];
+        self.copy_to_slice(&mut buf);
+        buf
+    }
+}
+
+pub trait GetStruct<T>: Buf {
+    fn get_struct(&mut self) -> T;
+}
+
+impl<B: Buf + Clone, T: From<B>> GetStruct<T> for B {
+    fn get_struct(&mut self) -> T {
+        T::from(self.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[repr(C)]
-    #[derive(Deserialize)]
-    struct TestStruct {
-        signature: [u8; 8],
-        version: u32,
-        length: u32,
-        checksum: u8,
-    }
-
-    #[test]
-    fn decoding() {
-        let car = vec![
-            0, 1, 2, 3, 4, 5, 6, 7,
-            0, 0, 0, 1,
-            0, 0, 0, 2,
-            3,
-        ];
-        let s = decode_bytes_be::<TestStruct>(&car);
-        assert_eq!(s.signature, [0, 1, 2, 3, 4, 5, 6, 7]);
-        assert_eq!(s.version, 1);
-        assert_eq!(s.length, 2);
-        assert_eq!(s.checksum, 3);
-    }
 
     #[test]
     fn formatting_hex() {
@@ -58,4 +60,5 @@ mod tests {
         let s = format_hex(&car);
         assert_eq!(s, "0x0001020304050607000000010000000203");
     }
+
 }

@@ -1,11 +1,11 @@
 mod util;
 
-use serde::Deserialize;
+use bytes::{Buf, Bytes};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::mem;
 use std::str;
+use util::{GetBytes, GetString};
 
 pub struct Bom {
     pub buffer: Vec<u8>,
@@ -15,8 +15,6 @@ pub struct Bom {
     variables: HashMap<String, u32>,
 }
 
-#[repr(C)]
-#[derive(Deserialize)]
 pub struct BomHeader {
     pub signature: [u8; 8],
     pub version: u32,
@@ -27,42 +25,90 @@ pub struct BomHeader {
     pub vars_length: u32,
 }
 
-#[repr(C)]
-#[derive(Deserialize)]
+impl<T: Buf> From<T> for BomHeader {
+    fn from(mut buf: T) -> Self {
+        BomHeader {
+            signature: buf.get_bytes(),
+            version: buf.get_u32(),
+            number_of_blocks: buf.get_u32(),
+            index_offset: buf.get_u32(),
+            index_length: buf.get_u32(),
+            vars_offset: buf.get_u32(),
+            vars_length: buf.get_u32(),
+        }
+    }
+}
+
 pub struct BomPointer {
     pub address: u32,
     pub length: u32,
 }
 
-#[repr(C)]
-#[derive(Deserialize, Debug)]
+impl<T: Buf> From<T> for BomPointer {
+    fn from(mut buf: T) -> Self {
+        BomPointer {
+            address: buf.get_u32(),
+            length: buf.get_u32(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct BomVar {
     pub index: u32,
     pub length: u8,
-    #[serde(skip_deserializing)]
     pub name: String,
 }
 
-#[repr(C)]
-#[derive(Deserialize, Debug)]
+impl<T: Buf> From<T> for BomVar {
+    fn from(mut buf: T) -> Self {
+        let i = buf.get_u32();
+        let length = buf.get_u8();
+        BomVar {
+            index: i,
+            length: length,
+            name: buf.get_string(length as usize).unwrap(),
+        }
+    }
+}
+
 pub struct BomTree {
     pub tree: [u8; 4],
     pub version: u32,
     pub child: u32,
     pub block_size: u32,
     pub path_count: u32,
+    #[allow(dead_code)]
     unknown: u8,
 }
 
-#[repr(C)]
-#[derive(Deserialize, Debug)]
+impl<T: Buf> From<T> for BomTree {
+    fn from(mut buf: T) -> Self {
+        BomTree {
+            tree: buf.get_bytes(),
+            version: buf.get_u32(),
+            child: buf.get_u32(),
+            block_size: buf.get_u32(),
+            path_count: buf.get_u32(),
+            unknown: buf.get_u8(),
+        }
+    }
+}
+
 pub struct BomTreeEntryIndices {
     pub value_index: u32,
     pub key_index: u32,
 }
 
-#[repr(C)]
-#[derive(Deserialize, Debug)]
+impl<T: Buf> From<T> for BomTreeEntryIndices {
+    fn from(mut buf: T) -> Self {
+        BomTreeEntryIndices {
+            value_index: buf.get_u32(),
+            key_index: buf.get_u32(),
+        }
+    }
+}
+
 pub struct BomTreeEntry {
     pub is_leaf: u16,
     pub count: u16,
@@ -70,13 +116,25 @@ pub struct BomTreeEntry {
     pub backward: u32,
 }
 
+impl<T: Buf> From<T> for BomTreeEntry {
+    fn from(mut buf: T) -> Self {
+        BomTreeEntry {
+            is_leaf: buf.get_u16(),
+            count: buf.get_u16(),
+            forward: buf.get_u32(),
+            backward: buf.get_u32(),
+        }
+    }
+}
+
 impl Bom {
     pub fn new(buffer: Vec<u8>) -> Self {
-        let header: BomHeader = util::decode_bytes_be(&buffer[..]);
-        let pointers = Self::parse_pointers(&buffer, header.index_offset);
+        let bytes = Bytes::from(buffer.clone());
+        let header = BomHeader::from(bytes.clone());
+        let pointers = Self::parse_pointers(bytes.slice(header.index_offset as usize..));
         let free_pointers_offset = header.index_offset as usize + 4 + pointers.len() * 8;
-        let free_pointers = Self::parse_pointers(&buffer, free_pointers_offset as u32);
-        let variables = Self::parse_vars(&buffer, header.vars_offset);
+        let free_pointers = Self::parse_pointers(bytes.slice(free_pointers_offset..));
+        let variables = Self::parse_vars(bytes.slice(header.vars_offset as usize..));
         Bom {
             buffer,
             header,
@@ -90,28 +148,23 @@ impl Bom {
         Self::new(fs::read(path).unwrap())
     }
 
-    fn parse_pointers(buffer: &Vec<u8>, offset: u32) -> Vec<BomPointer> {
-        let pointer_count = util::decode_bytes_be::<u32>(&buffer[offset as usize..]);
+    fn parse_pointers(mut bytes: Bytes) -> Vec<BomPointer> {
+        let pointer_count = bytes.get_u32();
         let mut pointers = Vec::new();
-        for i in 0..pointer_count {
-            let block = util::decode_bytes_be(&buffer[(offset + 4 + i * 8) as usize..]);
+        for _ in 0..pointer_count {
+            let block = BomPointer::from(bytes.copy_to_bytes(8));
             pointers.push(block);
         }
         pointers
     }
 
-    fn parse_vars(buffer: &Vec<u8>, offset: u32) -> HashMap<String, u32> {
-        let var_count = util::decode_bytes_be(&buffer[offset as usize..]);
+    fn parse_vars(mut bytes: Bytes) -> HashMap<String, u32> {
+        let var_count = bytes.get_u32();
         let mut vars = HashMap::new();
-        let mut pointer = offset + 4;
+        let mut pointer = 0;
         for _ in 0..var_count {
-            let mut var = util::decode_bytes_be::<BomVar>(&buffer[pointer as usize..]);
-            pointer += 5;
-            let name =
-                str::from_utf8(&buffer[pointer as usize..pointer as usize + var.length as usize])
-                    .unwrap();
-            pointer += var.length as u32;
-            var.name = name.to_string();
+            let var = BomVar::from(bytes.slice(pointer..));
+            pointer += var.length as usize + 5;
             vars.insert(var.name, var.index);
         }
         vars
@@ -129,25 +182,25 @@ impl Bom {
     where
         F: Fn(R, &'b [u8], &'b [u8]) -> R + Copy,
     {
+        let bytes = Bytes::from(self.buffer.to_vec());
+
         // Get the tree from the provided index
         let pointer = &self.pointers[pointer_index as usize];
-        let entry = util::decode_bytes_be::<BomTreeEntry>(&self.buffer[pointer.address as usize..]);
+        let entry = BomTreeEntry::from(bytes.slice(pointer.address as usize..));
 
         // Store initial value to reduce into
         let mut current_value = initial_value;
 
         if entry.is_leaf > 0 {
+            let mut bytes = bytes.slice(pointer.address as usize + 12..);
             // If it's a leaf then process the data
-            for i in 0..entry.count {
+            for _ in 0..entry.count {
                 // Each leaf has multiple entries which consist of a key and value pointer
-                let indices = util::decode_bytes_be::<BomTreeEntryIndices>(
-                    &self.buffer[(pointer.address as usize)
-                        + mem::size_of::<BomTreeEntry>()
-                        + (i as usize * 8)..],
-                );
+                let indices = BomTreeEntryIndices::from(bytes.copy_to_bytes(8));
                 let key_ptr = &self.pointers[indices.key_index as usize];
                 let value_ptr = &self.pointers[indices.value_index as usize];
-                current_value = reduce(current_value,
+                current_value = reduce(
+                    current_value,
                     &self.buffer[key_ptr.address as usize
                         ..key_ptr.address as usize + key_ptr.length as usize],
                     &self.buffer[value_ptr.address as usize
@@ -156,9 +209,9 @@ impl Bom {
             }
         } else {
             // If not a leaf then get index of child pointer
-            let index = util::decode_bytes_be::<u32>(
-                &self.buffer[(pointer.address + pointer.length) as usize..],
-            );
+            let index = bytes
+                .slice((pointer.address + pointer.length) as usize..)
+                .get_u32();
             current_value = self.reduce_tree(index, current_value, reduce);
         }
 
@@ -176,7 +229,8 @@ impl Bom {
         F: Fn(R, &'b [u8], &'b [u8]) -> R + Copy,
     {
         let pointer = self.pointer_for_var(var).unwrap();
-        let tree = util::decode_bytes_be::<BomTree>(&self.buffer[pointer.address as usize..]);
+        let bytes = Bytes::from(self.buffer.to_vec()).slice(pointer.address as usize..);
+        let tree = BomTree::from(bytes);
         self.reduce_tree(tree.child, initial_value, reduce)
     }
 
@@ -195,7 +249,8 @@ impl Bom {
         F: Fn(&'b [u8], &'b [u8]) -> V + Copy,
     {
         let pointer = self.pointer_for_var(var).unwrap();
-        let tree = util::decode_bytes_be::<BomTree>(&self.buffer[pointer.address as usize..]);
+        let bytes = Bytes::from(self.buffer.to_vec()).slice(pointer.address as usize..);
+        let tree = BomTree::from(bytes);
         self.map_tree(tree.child, map)
     }
 }
@@ -291,10 +346,9 @@ mod tests {
     fn reducing_tree() {
         let bom = Bom::with_file("test_files/test2.bom");
         let pointer = bom.pointer_for_var("Paths").unwrap();
-        let tree = util::decode_bytes_be::<BomTree>(&bom.buffer[pointer.address as usize..]);
-        let result = bom.reduce_tree(tree.child, 0, |reduction, _, _| {
-            reduction + 1
-        });
+        let bytes = Bytes::from(bom.buffer.to_vec()).slice(pointer.address as usize..);
+        let tree = BomTree::from(bytes);
+        let result = bom.reduce_tree(tree.child, 0, |reduction, _, _| reduction + 1);
         assert_eq!(result, 25);
     }
 
@@ -302,10 +356,9 @@ mod tests {
     fn mapping_tree() {
         let bom = Bom::with_file("test_files/test2.bom");
         let pointer = bom.pointer_for_var("Paths").unwrap();
-        let tree = util::decode_bytes_be::<BomTree>(&bom.buffer[pointer.address as usize..]);
-        let result = bom.map_tree(tree.child, |_, _| {
-            "test".to_string()
-        });
+        let bytes = Bytes::from(bom.buffer.to_vec()).slice(pointer.address as usize..);
+        let tree = BomTree::from(bytes);
+        let result = bom.map_tree(tree.child, |_, _| "test".to_string());
         assert_eq!(result.len(), 25);
         assert_eq!(result[0], "test".to_string());
     }
