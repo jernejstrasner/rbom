@@ -35,16 +35,6 @@ impl<B: Buf> GetBytes for B {
     }
 }
 
-pub trait GetStruct<T>: Buf {
-    fn get_struct(&mut self) -> T;
-}
-
-impl<B: Buf + Clone, T: From<B>> GetStruct<T> for B {
-    fn get_struct(&mut self) -> T {
-        T::from(self.clone())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
