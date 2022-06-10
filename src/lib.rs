@@ -169,7 +169,7 @@ impl Bom {
         let mut vars = HashMap::new();
         let mut pointer = 0;
         for _ in 0..var_count {
-            let var = Var::from(bin.get_buffer(pointer, 1024));
+            let var = Var::from(bin.get_buffer(bin.position() + pointer, 1024));
             pointer += var.length as usize + 5;
             vars.insert(var.name, var.index);
         }
