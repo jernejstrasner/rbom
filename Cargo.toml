@@ -4,5 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bytes = "1.1.0"
 binary-parser = {path = "../binary-parser", version = "0.1.0"}

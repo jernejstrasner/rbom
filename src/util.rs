@@ -1,6 +1,4 @@
 use std::fmt::Write;
-use bytes::Buf;
-use std::string::FromUtf8Error;
 
 pub fn format_hex(buffer: &[u8]) -> String {
     let mut s = String::new();
@@ -9,30 +7,6 @@ pub fn format_hex(buffer: &[u8]) -> String {
         write!(s, "{:02x}", buffer[i]).unwrap();
     }
     s
-}
-
-pub trait GetString: Buf {
-    fn get_string(&mut self, length: usize) -> Result<String, FromUtf8Error>;
-}
-
-impl<B: Buf> GetString for B {
-    fn get_string(&mut self, length: usize) -> Result<String, FromUtf8Error> {
-        let mut buf = vec![0; length];
-        self.copy_to_slice(&mut buf);
-        String::from_utf8(buf)
-    }
-}
-
-pub trait GetBytes: Buf {
-    fn get_bytes<const N: usize>(&mut self) -> [u8; N];
-}
-
-impl<B: Buf> GetBytes for B {
-    fn get_bytes<const N: usize>(&mut self) -> [u8; N] {
-        let mut buf = [0; N];
-        self.copy_to_slice(&mut buf);
-        buf
-    }
 }
 
 #[cfg(test)]
