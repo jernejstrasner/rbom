@@ -190,7 +190,8 @@ impl Bom {
     {
         // Get the tree entry from the provided index
         let pointer = &self.pointers[pointer_index as usize];
-        let mut bin = Binary::new(&self.buffer[pointer.address as usize..]);
+        let mut bin = Binary::new(&self.buffer);
+        bin.seek(pointer.address as usize);
         let entry = TreeEntry::from(bin.parse_buffer(12));
 
         // Store initial value to reduce into
