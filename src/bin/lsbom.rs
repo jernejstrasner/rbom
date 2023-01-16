@@ -60,11 +60,9 @@ pub fn main() {
     }
 
     let bom = Bom::with_file(&args[1]);
-
-    // TODO: Check if it's a valid bom file with a "Paths" variable
     
     // Extract the file infos
-    let paths = bom.reduce_tree_for_variable("Paths", HashMap::new(), |mut initial, key, val| {
+    let result = bom.reduce_tree_for_variable("Paths", HashMap::new(), |mut initial, key, val| {
         let id = u32::from_be_bytes(val[0..4].try_into().unwrap());
         let index = u32::from_be_bytes(val[4..8].try_into().unwrap());
         let parent = u32::from_be_bytes(key[0..4].try_into().unwrap());
@@ -77,6 +75,12 @@ pub fn main() {
         initial.insert(id, file_info);
         initial
     });
+
+    if let Result::Err(e) = result {
+        println!("Error: {:?}", e);
+        return;
+    }
+    let paths = result.unwrap();
 
     // Build the full paths
     let mut res = Vec::new();

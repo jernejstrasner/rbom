@@ -228,13 +228,17 @@ impl Bom {
         current_value
     }
 
-    pub fn reduce_tree_for_variable<'b, F, R>(&'b self, var: &str, initial_value: R, reduce: F) -> R
+    pub fn reduce_tree_for_variable<'b, F, R>(&'b self, var: &str, initial_value: R, reduce: F) -> Result<R, &'static str>
     where
         F: Fn(R, &'b [u8], &'b [u8]) -> R + Copy,
     {
-        let pointer = self.pointer_for_var(var).unwrap();
-        let tree = Tree::from(&self.buffer[pointer.address as usize..]);
-        self.reduce_tree(tree.child, initial_value, reduce)
+        match self.pointer_for_var(var) {
+            Some(pointer) => {
+                let tree = Tree::from(&self.buffer[pointer.address as usize..]);
+                Ok(self.reduce_tree(tree.child, initial_value, reduce))
+            }
+            None => Err("Variable not found"),
+        }
     }
 
     pub fn map_tree<'b, F, V>(&'b self, pointer_index: u32, map: F) -> Vec<V>
