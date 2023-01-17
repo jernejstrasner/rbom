@@ -5,6 +5,7 @@ use std::fmt;
 use std::fs;
 use std::str;
 use binary_parser::Binary;
+use log::warn;
 
 pub struct Bom {
     pub buffer: Vec<u8>,
@@ -28,13 +29,13 @@ impl From<&[u8]> for Header {
     fn from(buf: &[u8]) -> Self {
         let mut bin = Binary::new(buf);
         Header {
-            signature: bin.parse_bytes(),
-            version: bin.parse_u32_be(),
-            number_of_blocks: bin.parse_u32_be(),
-            index_offset: bin.parse_u32_be(),
-            index_length: bin.parse_u32_be(),
-            vars_offset: bin.parse_u32_be(),
-            vars_length: bin.parse_u32_be(),
+            signature: bin.parse_bytes().unwrap(),
+            version: bin.parse_u32_be().unwrap(),
+            number_of_blocks: bin.parse_u32_be().unwrap(),
+            index_offset: bin.parse_u32_be().unwrap(),
+            index_length: bin.parse_u32_be().unwrap(),
+            vars_offset: bin.parse_u32_be().unwrap(),
+            vars_length: bin.parse_u32_be().unwrap(),
         }
     }
 }
@@ -48,8 +49,8 @@ impl From<&[u8]> for Pointer {
     fn from(buf: &[u8]) -> Self {
         let mut bin = Binary::new(buf);
         Pointer {
-            address: bin.parse_u32_be(),
-            length: bin.parse_u32_be(),
+            address: bin.parse_u32_be().unwrap(),
+            length: bin.parse_u32_be().unwrap(),
         }
     }
 }
@@ -64,8 +65,8 @@ pub struct Var {
 impl From<&[u8]> for Var {
     fn from(buf: &[u8]) -> Self {
         let mut bin = Binary::new(buf);
-        let index = bin.parse_u32_be();
-        let length = bin.parse_u8();
+        let index = bin.parse_u32_be().unwrap();
+        let length = bin.parse_u8().unwrap();
         Var {
             index,
             length,
@@ -88,12 +89,12 @@ impl From<&[u8]> for Tree {
     fn from(buf: &[u8]) -> Self {
         let mut bin = Binary::new(buf);
         Tree {
-            tree: bin.parse_bytes(),
-            version: bin.parse_u32_be(),
-            child: bin.parse_u32_be(),
-            block_size: bin.parse_u32_be(),
-            path_count: bin.parse_u32_be(),
-            unknown: bin.parse_u8(),
+            tree: bin.parse_bytes().unwrap(),
+            version: bin.parse_u32_be().unwrap(),
+            child: bin.parse_u32_be().unwrap(),
+            block_size: bin.parse_u32_be().unwrap(),
+            path_count: bin.parse_u32_be().unwrap(),
+            unknown: bin.parse_u8().unwrap(),
         }
     }
 }
@@ -107,8 +108,8 @@ impl From<&[u8]> for TreeEntryIndices {
     fn from(buf: &[u8]) -> Self {
         let mut bin = Binary::new(buf);
         TreeEntryIndices {
-            value_index: bin.parse_u32_be(),
-            key_index: bin.parse_u32_be(),
+            value_index: bin.parse_u32_be().unwrap(),
+            key_index: bin.parse_u32_be().unwrap(),
         }
     }
 }
@@ -124,10 +125,10 @@ impl From<&[u8]> for TreeEntry {
     fn from(buf: &[u8]) -> Self {
         let mut bin = Binary::new(buf);
         TreeEntry {
-            is_leaf: bin.parse_u16_be(),
-            count: bin.parse_u16_be(),
-            forward: bin.parse_u32_be(),
-            backward: bin.parse_u32_be(),
+            is_leaf: bin.parse_u16_be().unwrap(),
+            count: bin.parse_u16_be().unwrap(),
+            forward: bin.parse_u32_be().unwrap(),
+            backward: bin.parse_u32_be().unwrap(),
         }
     }
 }
@@ -154,10 +155,10 @@ impl Bom {
 
     fn parse_pointers(bytes: &[u8]) -> Vec<Pointer> {
         let mut bin = Binary::new(bytes);
-        let pointer_count = bin.parse_u32_be();
+        let pointer_count = bin.parse_u32_be().unwrap();
         let mut pointers = Vec::new();
         for _ in 0..pointer_count {
-            let block = Pointer::from(bin.parse_buffer(8));
+            let block = Pointer::from(bin.parse_buffer(8).unwrap());
             pointers.push(block);
         }
         pointers
@@ -165,23 +166,23 @@ impl Bom {
 
     fn parse_vars(bytes: &[u8]) -> HashMap<String, u32> {
         let mut bin = Binary::new(bytes);
-        let var_count = bin.parse_u32_be();
+        let var_count = bin.parse_u32_be().unwrap();
         let mut vars = HashMap::new();
         let mut pointer = 0;
         for _ in 0..var_count {
-            let var = Var::from(bin.get_buffer(bin.position() + pointer, 1024));
+            let var = Var::from(bin.get_buffer(bin.position() + pointer, 1024).unwrap());
             pointer += var.length as usize + 5;
             vars.insert(var.name, var.index);
         }
         vars
     }
 
-    pub fn pointer(&self, index: u32) -> &Pointer {
-        &self.pointers[index as usize]
+    pub fn pointer(&self, index: u32) -> Option<&Pointer> {
+        self.pointers.get(index as usize)
     }
 
     pub fn pointer_for_var(&self, name: &str) -> Option<&Pointer> {
-        self.variables.get(name).map(|index| self.pointer(*index))
+        self.variables.get(name).map(|index| self.pointer(*index)).flatten()
     }
 
     pub fn reduce_tree<'b, F, R>(&'b self, pointer_index: u32, initial_value: R, reduce: F) -> R
@@ -189,10 +190,10 @@ impl Bom {
         F: Fn(R, &'b [u8], &'b [u8]) -> R + Copy,
     {
         // Get the tree entry from the provided index
-        let pointer = &self.pointers[pointer_index as usize];
+        let pointer = &self.pointer(pointer_index).unwrap();
         let mut bin = Binary::new(&self.buffer);
         bin.seek(pointer.address as usize);
-        let entry = TreeEntry::from(bin.parse_buffer(12));
+        let entry = TreeEntry::from(bin.parse_buffer(12).unwrap());
 
         // Store initial value to reduce into
         let mut current_value = initial_value;
@@ -201,22 +202,34 @@ impl Bom {
             // If it's a leaf then process the data
             for _ in 0..entry.count {
                 // Each leaf has multiple entries which consist of a key and value pointer
-                let indices = TreeEntryIndices::from(bin.parse_buffer(8));
-                let key_ptr = &self.pointers[indices.key_index as usize];
-                let value_ptr = &self.pointers[indices.value_index as usize];
-                current_value = reduce(
-                    current_value,
-                    bin.get_buffer(key_ptr.address as usize, key_ptr.length as usize),
-                    bin.get_buffer(value_ptr.address as usize, value_ptr.length as usize),
-                );
+                let indices = TreeEntryIndices::from(bin.parse_buffer(8).unwrap());
+                // Get both the key and value pointers and check that they exist and are not empty
+                // Corrupt files will cause out of bounds errors here otherwise
+                match (self.pointer(indices.key_index), self.pointer(indices.value_index)) {
+                    (Some(key_ptr), Some(value_ptr)) if key_ptr.length > 0 && value_ptr.length > 0 => {
+                        current_value = reduce(
+                            current_value,
+                            bin.get_buffer(key_ptr.address as usize, key_ptr.length as usize).unwrap(),
+                            bin.get_buffer(value_ptr.address as usize, value_ptr.length as usize).unwrap(),
+                        );
+                    }
+                    _ => {
+                        // We'll just skip parsing the leaf and warn about it
+                        // It most likely means the asset catalog is corrupt
+                        warn!("Invalid pointer: {} or {}", indices.key_index, indices.value_index);
+                    }
+                }
             }
-        } else {
+        } else if entry.count == 0 {
             // The tree entry that's not a leaf should have no entries
-            debug_assert!(entry.count == 0);
+            // TODO: Is this true though? Tere's a case of a weird asset catalog that has a count of more
+            // but if trying to parse it will throw an exception
             // If not a leaf then get index of child pointer
             bin.seek((pointer.address + pointer.length) as usize); // TODO: maybe not needed?
-            let index = bin.parse_u32_be();
+            let index = bin.parse_u32_be().unwrap();
             current_value = self.reduce_tree(index, current_value, reduce);
+        } else {
+            warn!("Encountered a tree entry that's not a leaf and has entries (count: {})", entry.count);
         }
 
         // If has siblings then move horizontally to the next sibling
@@ -228,7 +241,7 @@ impl Bom {
         current_value
     }
 
-    pub fn reduce_tree_for_variable<'b, F, R>(&'b self, var: &str, initial_value: R, reduce: F) -> Result<R, &'static str>
+    pub fn reduce_tree_for_variable<'b, F, R>(&'b self, var: &str, initial_value: R, reduce: F) -> Result<R, String>
     where
         F: Fn(R, &'b [u8], &'b [u8]) -> R + Copy,
     {
@@ -237,7 +250,7 @@ impl Bom {
                 let tree = Tree::from(&self.buffer[pointer.address as usize..]);
                 Ok(self.reduce_tree(tree.child, initial_value, reduce))
             }
-            None => Err("Variable not found"),
+            None => Err(format!("Variable not found: {}", var)),
         }
     }
 
